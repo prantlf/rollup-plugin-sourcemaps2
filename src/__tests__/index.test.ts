@@ -23,6 +23,22 @@ const sourceMapPath = path.format({
   ext: '.js.map',
 });
 
+// Function to compare two file paths
+function comparePath(a: string, b: string): boolean {
+  // Split the paths into segments
+  const first = a.split(/[\\/]/);
+  const second = b.split(/[\\/]/);
+
+  // If the platform is Windows, convert the first segment (drive letter) to lowercase
+  if (process.platform == 'win32') {
+    first[0] = first[0].toLowerCase();
+    second[0] = second[0].toLowerCase();
+  }
+
+  // Return true if both paths have the same number of segments and all corresponding segments are equal
+  return first.length === second.length && first.every((v, i) => v == second[i]);
+}
+
 async function rollupBundle({
   outputText,
   sourceMapText,
@@ -31,16 +47,14 @@ async function rollupBundle({
   pluginOptions?: SourcemapsPluginOptions;
 }) {
   const load = async (path: string) => {
-    switch (path) {
-      case inputPath:
-        return inputText;
-      case outputPath:
-        return outputText;
-      case sourceMapPath:
-        return sourceMapText!;
-      default:
-        throw new Error(`Unexpected path: ${path}`);
+    if (comparePath(path, inputPath)) {
+      return inputText;
+    } else if (comparePath(path, outputPath)) {
+      return outputText;
+    } else if (comparePath(path, sourceMapPath)) {
+      return sourceMapText!;
     }
+    throw new Error(`Unexpected path: ${path}`);
   };
 
   const { generate } = await rollup({
@@ -95,9 +109,7 @@ describe('detects files with source maps', () => {
     ${false}  | ${true}         | ${true}
   `(
     'sourceMap: $sourceMap, inlineSourceMap: $inlineSourceMap, inlineSources: $inlineSources',
-    async (args: Record<string, boolean>) => {
-      const { sourceMap, inlineSourceMap, inlineSources } = args;
-
+    async ({ sourceMap, inlineSourceMap, inlineSources }: Record<string, boolean>) => {
       const { outputText, sourceMapText } = ts.transpileModule(inputText, {
         fileName: inputPath,
         compilerOptions: {
@@ -117,7 +129,7 @@ describe('detects files with source maps', () => {
       const { map } = await rollupBundle({ outputText, sourceMapText });
 
       expect(map).toBeDefined();
-      expect(map!.sources).toStrictEqual([inputPath]);
+      expect(map!.sources.map(source => path.normalize(source))).toStrictEqual([inputPath]);
       expect(map!.sourcesContent).toStrictEqual([inputText]);
     },
   );
@@ -144,7 +156,7 @@ describe('ignores filtered files', () => {
     });
 
     expect(map).toBeDefined();
-    expect(map!.sources).toStrictEqual([outputPath]);
+    expect(map!.sources.map(source => path.normalize(source))).toStrictEqual([outputPath]);
     expect(map!.sourcesContent).toStrictEqual([outputText]);
   });
 
@@ -163,12 +175,12 @@ describe('ignores filtered files', () => {
       outputText,
       sourceMapText,
       pluginOptions: {
-        exclude: [path.relative(process.cwd(), outputPath)],
+        exclude: [path.relative(process.cwd(), outputPath).split('\\').join('/')],
       },
     });
 
     expect(map).toBeDefined();
-    expect(map!.sources).toStrictEqual([outputPath]);
+    expect(map!.sources.map(source => path.normalize(source))).toStrictEqual([outputPath]);
     expect(map!.sourcesContent).toStrictEqual([outputText]);
   });
 });
@@ -188,14 +200,14 @@ it('delegates failing file reads to the next plugin', async () => {
     outputText,
     sourceMapText,
     pluginOptions: {
-      readFile(_path, cb) {
+      readFile(_path: string, cb: (error: Error | null, data: Buffer | string) => void) {
         cb(new Error('Failed!'), '');
       },
     },
   });
 
   expect(map).toBeDefined();
-  expect(map!.sources).toStrictEqual([outputPath]);
+  expect(map!.sources.map(source => path.normalize(source))).toStrictEqual([outputPath]);
   expect(map!.sourcesContent).toStrictEqual([outputText]);
 });
 
@@ -228,6 +240,6 @@ it('handles failing source maps reads', async () => {
   });
 
   expect(map).toBeDefined();
-  expect(map!.sources).toStrictEqual([outputPath]);
+  expect(map!.sources.map(source => path.normalize(source))).toStrictEqual([outputPath]);
   expect(map!.sourcesContent).toStrictEqual([outputText]);
 });
